@@ -201,44 +201,46 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
   }
 });
 
-router.get("/admin/pending", async (req, res) => {
-  try {
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+// router.get("/admin/pending", async (req, res) => {
+//   try {
+//     const { page = 1, limit = 10 } = req.query;
+//     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const pendingRequests = await Verification.find({ status: "pending" })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+//     const pendingRequests = await Verification.find({ status: "pending" })
+//       .sort({ createdAt: -1 })
+//       .skip(skip)
+//       .limit(parseInt(limit));
 
-    const totalCount = await Verification.countDocuments({ status: "pending" });
+//     const totalCount = await Verification.countDocuments({ status: "pending" });
 
-    res.json({
-      statusCode: 200,
-      message: "Pending requests fetched successfully",
-      data: {
-        requests: pendingRequests,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(totalCount / parseInt(limit)),
-          totalRequests: totalCount,
-          requestsPerPage: parseInt(limit),
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching pending requests:", error);
-    res.status(500).json({
-      statusCode: 500,
-      message: "Error fetching pending requests",
-      error: error.message,
-    });
-  }
-});
+//     res.json({
+//       statusCode: 200,
+//       message: "Pending requests fetched successfully",
+//       data: {
+//         requests: pendingRequests,
+//         pagination: {
+//           currentPage: parseInt(page),
+//           totalPages: Math.ceil(totalCount / parseInt(limit)),
+//           totalRequests: totalCount,
+//           requestsPerPage: parseInt(limit),
+//         },
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error fetching pending requests:", error);
+//     res.status(500).json({
+//       statusCode: 500,
+//       message: "Error fetching pending requests",
+//       error: error.message,
+//     });
+//   }
+// });
 
 // ============================================
 // 3. REVIEW INDIVIDUAL IMAGES
 // ============================================
+
+
 router.patch("/:id/review-images", async (req, res) => {
   try {
     const { id } = req.params;
