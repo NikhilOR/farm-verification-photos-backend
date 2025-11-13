@@ -5,6 +5,10 @@ const multer = require("multer");
 const cloudinary = require("../config/cloudinary");
 const Verification = require("../models/Verification");
 
+const escapeRegex = (str) => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 // Configure multer
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -637,12 +641,9 @@ router.get("/user/:userId/current-status", async (req, res) => {
     });
   }
 });
-
 // ============================================
-// ENHANCED: GET /api/verifications/admin/:status
-// Supported statuses: pending | approved | rejected | all
+// COMPLETE FIXED ADMIN ROUTE WITH WORKING FILTERS
 // ============================================
-
 router.get("/admin/:status", async (req, res) => {
   try {
     const { status } = req.params;
@@ -655,8 +656,9 @@ router.get("/admin/:status", async (req, res) => {
       });
     }
 
+    // ============================================
     // PAGINATION
-
+    // ============================================
     const page = Math.max(1, parseInt(req.query.page || "1", 10));
     const limit = Math.max(
       1,
@@ -664,8 +666,9 @@ router.get("/admin/:status", async (req, res) => {
     ); // Max 100 per page
     const skip = (page - 1) * limit;
 
+    // ============================================
     // BUILD QUERY WITH FILTERS
-
+    // ============================================
     const query = {};
 
     // Status filter (skip if 'all')
@@ -686,43 +689,57 @@ router.get("/admin/:status", async (req, res) => {
       toDate,
     } = req.query;
 
-    // EXACT MATCH FILTERS
+    // ============================================
+    // EXACT MATCH FILTER (userId only)
+    // ============================================
     if (userId) {
       query.userId = String(userId).trim();
     }
 
-    if (district) {
-      query.district = new RegExp(`^${String(district).trim()}$`, "i"); // Case-insensitive exact
-    }
-
-    if (taluk) {
-      query.taluk = new RegExp(`^${String(taluk).trim()}$`, "i"); // Case-insensitive exact
-    }
-
-    // PARTIAL MATCH FILTERS (Case-insensitive)
+    // ============================================
+    // PARTIAL MATCH FILTERS - All Case-Insensitive with Regex Escaping
+    // ============================================
     if (phone) {
-      query.phone = new RegExp(String(phone).trim(), "i");
+      const escapedPhone = escapeRegex(String(phone).trim());
+      query.phone = new RegExp(escapedPhone, "i");
     }
 
     if (fullName) {
-      query.fullName = new RegExp(String(fullName).trim(), "i");
+      const escapedFullName = escapeRegex(String(fullName).trim());
+      query.fullName = new RegExp(escapedFullName, "i");
     }
 
     if (cropName) {
-      query.cropName = new RegExp(String(cropName).trim(), "i");
+      const escapedCropName = escapeRegex(String(cropName).trim());
+      query.cropName = new RegExp(escapedCropName, "i");
     }
 
     if (village) {
-      query.village = new RegExp(String(village).trim(), "i");
+      const escapedVillage = escapeRegex(String(village).trim());
+      query.village = new RegExp(escapedVillage, "i");
     }
 
-    // DATE RANGE FILTER
+    if (taluk) {
+      const escapedTaluk = escapeRegex(String(taluk).trim());
+      query.taluk = new RegExp(escapedTaluk, "i");
+    }
+
+    if (district) {
+      const escapedDistrict = escapeRegex(String(district).trim());
+      query.district = new RegExp(escapedDistrict, "i");
+    }
+
+    // ============================================
+    // DATE RANGE FILTER (FIXED FOR UTC)
+    // ============================================
     if (fromDate || toDate) {
       query.createdAt = {};
 
       if (fromDate) {
         const f = new Date(String(fromDate));
         if (!isNaN(f.getTime())) {
+          // Set to start of day in UTC (00:00:00.000)
+          f.setUTCHours(0, 0, 0, 0);
           query.createdAt.$gte = f;
         }
       }
@@ -730,20 +747,26 @@ router.get("/admin/:status", async (req, res) => {
       if (toDate) {
         const t = new Date(String(toDate));
         if (!isNaN(t.getTime())) {
-          // Set to end of day
-          t.setHours(23, 59, 59, 999);
+          // Set to end of day in UTC (23:59:59.999)
+          t.setUTCHours(23, 59, 59, 999);
           query.createdAt.$lte = t;
         }
       }
 
-      // Remove createdAt if no valid dates
+      // Remove createdAt if no valid dates were parsed
       if (Object.keys(query.createdAt).length === 0) {
         delete query.createdAt;
       }
     }
 
-    // EXECUTE QUERY
+    // ============================================
+    // DEBUG LOGGING (Optional - comment out in production)
+    // ============================================
+    console.log('🔍 Applied Query Filters:', JSON.stringify(query, null, 2));
 
+    // ============================================
+    // EXECUTE QUERY
+    // ============================================
     const [totalCount, requests] = await Promise.all([
       Verification.countDocuments(query),
       Verification.find(query)
@@ -753,8 +776,11 @@ router.get("/admin/:status", async (req, res) => {
         .lean(),
     ]);
 
-    // ENRICH RESPONSE WITH PHOTO SUMMARY
+    console.log(`✅ Found ${totalCount} total results, returning ${requests.length} on page ${page}`);
 
+    // ============================================
+    // ENRICH RESPONSE WITH PHOTO SUMMARY
+    // ============================================
     const enriched = requests.map((v) => {
       const photoSummary = {
         total: Array.isArray(v.photos) ? v.photos.length : 0,
@@ -775,8 +801,9 @@ router.get("/admin/:status", async (req, res) => {
       };
     });
 
-    // RESPONSE WITH APPLIED FILTERS INFO
-
+    // ============================================
+    // BUILD APPLIED FILTERS RESPONSE
+    // ============================================
     const appliedFilters = {};
     if (userId) appliedFilters.userId = userId;
     if (phone) appliedFilters.phone = phone;
@@ -788,6 +815,9 @@ router.get("/admin/:status", async (req, res) => {
     if (fromDate) appliedFilters.fromDate = fromDate;
     if (toDate) appliedFilters.toDate = toDate;
 
+    // ============================================
+    // SEND RESPONSE
+    // ============================================
     res.json({
       statusCode: 200,
       message: `${
@@ -818,11 +848,22 @@ router.get("/admin/:status", async (req, res) => {
             "fromDate",
             "toDate",
           ],
+          filterTypes: {
+            userId: "exact match",
+            phone: "partial match (case-insensitive)",
+            fullName: "partial match (case-insensitive)",
+            cropName: "partial match (case-insensitive)",
+            village: "partial match (case-insensitive)",
+            taluk: "partial match (case-insensitive)",
+            district: "partial match (case-insensitive)",
+            fromDate: "date range (format: YYYY-MM-DD)",
+            toDate: "date range (format: YYYY-MM-DD)",
+          },
         },
       },
     });
   } catch (error) {
-    console.error("Error fetching admin verifications:", error);
+    console.error("❌ Error fetching admin verifications:", error);
     res.status(500).json({
       statusCode: 500,
       message: "Error fetching requests",
