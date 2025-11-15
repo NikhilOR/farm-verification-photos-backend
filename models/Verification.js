@@ -1,8 +1,9 @@
-// models/Verification.js - UPDATED
+// models/Verification.js
 const mongoose = require('mongoose');
 
 const verificationSchema = new mongoose.Schema({
   userId: { type: String, required: true },
+  cropId: { type: String, required: true },
   cropName: { type: String, required: true },
   fullName: String,
   phone: String,
@@ -32,7 +33,7 @@ const verificationSchema = new mongoose.Schema({
     locationType: { 
       type: String, 
       enum: ['farm', 'village'], 
-      required: false  // 🆕 NOT REQUIRED during submission
+      required: false
     }
   },
   
@@ -43,8 +44,25 @@ const verificationSchema = new mongoose.Schema({
     default: 'pending' 
   },
   
-  // Rejection details
-  rejectionReason: { type: String },
+  // 🔄 CHANGED: Rejection reason with predefined options
+  rejectionReason: { 
+    type: String,
+    enum: [
+      'poor_photo_quality',           // Photos are blurry or unclear
+      'face_not_visible',             // Face not clearly visible in photos
+      'incorrect_location',           // Location doesn't match farm/village
+      'insufficient_photos',          // Not enough photos provided
+      'duplicate_request',            // User already has pending/approved request
+      'crop_mismatch',                // Crop in photo doesn't match declared crop
+      'fake_or_manipulated',          // Photos appear fake or edited
+      'incomplete_information',       // Missing required information
+      'suspicious_activity',          // Potentially fraudulent activity detected
+      'other'                         // Other reasons (can add notes separately)
+    ]
+  },
+  
+  // 🆕 ADDED: Optional additional notes for rejection (if reason is 'other' or needs explanation)
+  rejectionNotes: { type: String },
   
   // Review metadata
   reviewedAt: { type: Date },
@@ -57,6 +75,7 @@ const verificationSchema = new mongoose.Schema({
 // Indexes
 verificationSchema.index({ location: '2dsphere' });
 verificationSchema.index({ userId: 1 });
+verificationSchema.index({ cropId: 1 });
 verificationSchema.index({ status: 1 });
 
 // Update timestamp before saving

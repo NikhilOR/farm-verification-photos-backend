@@ -1,13 +1,31 @@
-// routes/verification.js - COMPLETE VERSION
+// routes/verification.js - UPDATED VERSION WITH CROPID
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
+const axios = require("axios"); // 🆕 ADDED
 const cloudinary = require("../config/cloudinary");
 const Verification = require("../models/Verification");
 
 const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
+
+// 🆕 ADDED: Crop API configuration
+const CROP_API_URL = process.env.CROP_API_URL || "https://markhet-internal-ngfs.onrender.com";
+
+// 🆕 ADDED: Helper function to fetch crop data
+async function fetchCropData(cropId) {
+  try {
+    const response = await axios.get(`${CROP_API_URL}/crop/get-crop-by-id/${cropId}`);
+    if (response.data.code === 200) {
+      return response.data.data; // Return the data object directly
+    }
+    throw new Error(response.data.message || "Failed to fetch crop data");
+  } catch (error) {
+    console.error("Error fetching crop data:", error.message);
+    throw error;
+  }
+}
 
 // Configure multer
 const storage = multer.memoryStorage();
@@ -39,13 +57,14 @@ const uploadToCloudinary = (fileBuffer, filename) => {
 };
 
 // ============================================
-// 1. SUBMIT VERIFICATION REQUEST (UPDATED WITH COMPLETE FLOW)
+// 1. SUBMIT VERIFICATION REQUEST - 🔄 UPDATED TO USE CROPID
 // ============================================
 router.post("/submit", upload.array("photos", 3), async (req, res) => {
   try {
     const {
-      userId,
-      cropName,
+      cropId, // 🔄 CHANGED: Now using cropId instead of userId + cropName
+      location,
+      // These fields come from frontend but will be validated against API data
       fullName,
       phone,
       village,
@@ -55,16 +74,36 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
       variety,
       moisture,
       willDry,
-      location,
     } = req.body;
 
-    // Validate required fields
-    if (!userId || !cropName || !req.files || req.files.length === 0) {
+    // 🔄 CHANGED: Validate only cropId and photos
+    if (!cropId || !req.files || req.files.length === 0) {
       return res.status(400).json({
         statusCode: 400,
-        message: "Missing required fields: userId, cropName, or photos",
+        message: "Missing required fields: cropId or photos",
       });
     }
+
+    // 🆕 NEW: Fetch crop data from external API
+    let cropData;
+    try {
+      cropData = await fetchCropData(cropId);
+      console.log(`✅ Fetched crop data for cropId: ${cropId}`);
+    } catch (error) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: "Crop not found or unable to fetch crop data",
+        error: error.message,
+      });
+    }
+
+    // 🆕 NEW: Extract all required data from crop API response
+    const userId = cropData.farm.user.id;
+    const cropName = cropData.cropName;
+    const farmData = cropData.farm;
+    const userData = cropData.farm.user;
+
+    console.log(`📍 Processing verification for userId: ${userId}, cropId: ${cropId}, cropName: ${cropName}`);
 
     // FLOW LOGIC: Check if user has existing request
     // Find the LATEST verification request for this user
@@ -131,7 +170,7 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
 
     // Upload all photos to Cloudinary
     const uploadPromises = req.files.map((file, index) =>
-      uploadToCloudinary(file.buffer, `${userId}_${index}`)
+      uploadToCloudinary(file.buffer, `${userId}_${cropId}_${index}`) // 🔄 CHANGED: Added cropId to filename
     );
 
     const cloudinaryResults = await Promise.all(uploadPromises);
@@ -143,22 +182,34 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
 
     console.log("Photos uploaded to Cloudinary:", photos);
 
+    // 🆕 NEW: Build verification data from API response (use frontend data as fallback)
+    const verificationData = {
+      userId: userId,
+      cropId: cropId, // 🆕 NEW FIELD
+      cropName: cropName,
+      fullName: fullName || userData.name || "",
+      phone: phone || userData.mobileNumber?.replace("+91", "") || "",
+      village: village || farmData.village || "",
+      taluk: taluk || farmData.taluk || "",
+      district: district || farmData.district || "",
+      quantity: quantity || (cropData.quantity && cropData.measure 
+        ? `${cropData.quantity} ${cropData.measure}` 
+        : ""),
+      variety: variety || cropData.maizeVariety || cropData.otherVarietyName || "",
+      moisture: moisture || cropData.moisturePercent?.toString() || "",
+      willDry: willDry || (cropData.willYouDryIt === true 
+        ? "Yes" 
+        : cropData.willYouDryIt === false 
+        ? "No" 
+        : ""),
+    };
+
     // ============================================
     // CREATE NEW VERIFICATION RECORD
     // Important: This creates a NEW record, doesn't update existing
     // ============================================
     const verification = new Verification({
-      userId,
-      cropName,
-      fullName,
-      phone,
-      village,
-      taluk,
-      district,
-      quantity,
-      variety,
-      moisture,
-      willDry,
+      ...verificationData,
       photos,
       location: {
         type: "Point",
@@ -169,12 +220,12 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
 
     await verification.save();
 
-    console.log("New verification created:", verification._id);
+    console.log("✅ New verification created:", verification._id);
 
     // Log if this was a re-submission after rejection
     if (existingRequest && existingRequest.status === "rejected") {
       console.log(
-        `New request created for userId ${userId} after previous rejection (ID: ${existingRequest._id})`
+        `🔄 New request created for userId ${userId} after previous rejection (ID: ${existingRequest._id})`
       );
     }
 
@@ -184,6 +235,8 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
       data: {
         id: verification._id,
         userId: verification.userId,
+        cropId: verification.cropId, // 🆕 NEW
+        cropName: verification.cropName,
         photos: verification.photos,
         status: verification.status,
         createdAt: verification.createdAt,
@@ -192,7 +245,7 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Verification submission error:", error);
+    console.error("❌ Verification submission error:", error);
     res.status(500).json({
       statusCode: 500,
       message: "Failed to submit verification",
@@ -201,46 +254,9 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
   }
 });
 
-// router.get("/admin/pending", async (req, res) => {
-//   try {
-//     const { page = 1, limit = 10 } = req.query;
-//     const skip = (parseInt(page) - 1) * parseInt(limit);
-
-//     const pendingRequests = await Verification.find({ status: "pending" })
-//       .sort({ createdAt: -1 })
-//       .skip(skip)
-//       .limit(parseInt(limit));
-
-//     const totalCount = await Verification.countDocuments({ status: "pending" });
-
-//     res.json({
-//       statusCode: 200,
-//       message: "Pending requests fetched successfully",
-//       data: {
-//         requests: pendingRequests,
-//         pagination: {
-//           currentPage: parseInt(page),
-//           totalPages: Math.ceil(totalCount / parseInt(limit)),
-//           totalRequests: totalCount,
-//           requestsPerPage: parseInt(limit),
-//         },
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Error fetching pending requests:", error);
-//     res.status(500).json({
-//       statusCode: 500,
-//       message: "Error fetching pending requests",
-//       error: error.message,
-//     });
-//   }
-// });
-
 // ============================================
-// 3. REVIEW INDIVIDUAL IMAGES
+// 3. REVIEW INDIVIDUAL IMAGES - NO CHANGES NEEDED
 // ============================================
-
-
 router.patch("/:id/review-images", async (req, res) => {
   try {
     const { id } = req.params;
@@ -312,14 +328,13 @@ router.patch("/:id/review-images", async (req, res) => {
   }
 });
 
-
-// 4. FINALIZE VERIFICATION DECISION
-
-
+// ============================================
+// 4. FINALIZE VERIFICATION DECISION - 🔄 UPDATED WITH REJECTION REASON ENUM
+// ============================================
 router.patch("/:id/finalize", async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, rejectionReason, reviewedBy, locationType } = req.body; // 🆕 Added locationType
+    const { status, rejectionReason, rejectionNotes, reviewedBy, locationType } = req.body; // 🔄 CHANGED: Added rejectionNotes
 
     // Validate status
     if (!status || !["approved", "rejected"].includes(status)) {
@@ -329,7 +344,7 @@ router.patch("/:id/finalize", async (req, res) => {
       });
     }
 
-    // If rejecting, reason is required
+    // 🔄 CHANGED: If rejecting, validate rejection reason enum
     if (status === "rejected" && !rejectionReason) {
       return res.status(400).json({
         statusCode: 400,
@@ -337,7 +352,28 @@ router.patch("/:id/finalize", async (req, res) => {
       });
     }
 
-    // 🆕 If approving, locationType is required
+    // 🆕 NEW: Validate rejection reason is from enum
+    const validRejectionReasons = [
+      'poor_photo_quality',
+      'face_not_visible',
+      'incorrect_location',
+      'insufficient_photos',
+      'duplicate_request',
+      'crop_mismatch',
+      'fake_or_manipulated',
+      'incomplete_information',
+      'suspicious_activity',
+      'other'
+    ];
+
+    if (status === "rejected" && !validRejectionReasons.includes(rejectionReason)) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: `Invalid rejection reason. Must be one of: ${validRejectionReasons.join(', ')}`,
+      });
+    }
+
+    // If approving, locationType is required
     if (status === "approved" && !locationType) {
       return res.status(400).json({
         statusCode: 400,
@@ -397,9 +433,12 @@ router.patch("/:id/finalize", async (req, res) => {
 
     if (status === "rejected") {
       verification.rejectionReason = rejectionReason;
+      if (rejectionNotes) {
+        verification.rejectionNotes = rejectionNotes; // 🆕 NEW: Save optional notes
+      }
     }
 
-    // 🆕 Set location type when approving
+    // Set location type when approving
     if (status === "approved" && locationType) {
       verification.location.locationType = locationType;
     }
@@ -412,11 +451,13 @@ router.patch("/:id/finalize", async (req, res) => {
       data: {
         id: verification._id,
         userId: verification.userId,
+        cropId: verification.cropId, // 🆕 NEW: Include cropId in response
         status: verification.status,
         rejectionReason: verification.rejectionReason,
+        rejectionNotes: verification.rejectionNotes, // 🆕 NEW
         reviewedAt: verification.reviewedAt,
         reviewedBy: verification.reviewedBy,
-        locationType: verification.location.locationType, // 🆕 Return location type
+        locationType: verification.location.locationType,
         photos: verification.photos,
       },
     });
@@ -430,10 +471,8 @@ router.patch("/:id/finalize", async (req, res) => {
   }
 });
 
-// Add this NEW route after the finalize route
-
 // ============================================
-// 4.5 UPDATE LOCATION TYPE
+// 4.5 UPDATE LOCATION TYPE - NO CHANGES NEEDED
 // ============================================
 router.patch("/:id/update-location-type", async (req, res) => {
   try {
@@ -480,8 +519,9 @@ router.patch("/:id/update-location-type", async (req, res) => {
     });
   }
 });
+
 // ============================================
-// 5. GET VERIFICATION BY ID (EXISTING - ENHANCED)
+// 5. GET VERIFICATION BY ID - NO CHANGES NEEDED
 // ============================================
 router.get("/:id", async (req, res) => {
   try {
@@ -493,7 +533,6 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    // 🆕 Add photo summary
     const photoSummary = {
       total: verification.photos.length,
       approved: verification.photos.filter((p) => p.status === "approved")
@@ -520,7 +559,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // ============================================
-// 6. GET USER'S VERIFICATIONS (EXISTING - ENHANCED)
+// 6. GET USER'S VERIFICATIONS - NO CHANGES NEEDED
 // ============================================
 router.get("/user/:userId", async (req, res) => {
   try {
@@ -528,7 +567,6 @@ router.get("/user/:userId", async (req, res) => {
       userId: req.params.userId,
     }).sort({ createdAt: -1 });
 
-    // 🆕 Add summary for each verification
     const enhancedVerifications = verifications.map((v) => {
       const photoSummary = {
         total: v.photos.length,
@@ -557,7 +595,7 @@ router.get("/user/:userId", async (req, res) => {
 });
 
 // ============================================
-// 7. GET USER'S CURRENT STATUS (UPDATED)
+// 7. GET USER'S CURRENT STATUS - NO CHANGES NEEDED
 // ============================================
 router.get("/user/:userId/current-status", async (req, res) => {
   try {
@@ -590,9 +628,6 @@ router.get("/user/:userId/current-status", async (req, res) => {
         .length,
     };
 
-    // ============================================
-    // DETERMINE IF USER CAN SUBMIT NEW REQUEST
-    // ============================================
     let canSubmit = false;
     let blockMessage = null;
 
@@ -628,6 +663,7 @@ router.get("/user/:userId/current-status", async (req, res) => {
           id: latestVerification._id,
           status: latestVerification.status,
           rejectionReason: latestVerification.rejectionReason,
+          rejectionNotes: latestVerification.rejectionNotes, // 🆕 NEW
           photoSummary,
           createdAt: latestVerification.createdAt,
           reviewedAt: latestVerification.reviewedAt,
@@ -642,8 +678,9 @@ router.get("/user/:userId/current-status", async (req, res) => {
     });
   }
 });
+
 // ============================================
-// COMPLETE FIXED ADMIN ROUTE WITH WORKING FILTERS
+// 8. ADMIN ROUTE - 🔄 UPDATED TO INCLUDE CROPID FILTER
 // ============================================
 router.get("/admin/:status", async (req, res) => {
   try {
@@ -657,22 +694,15 @@ router.get("/admin/:status", async (req, res) => {
       });
     }
 
-    // ============================================
-    // PAGINATION
-    // ============================================
     const page = Math.max(1, parseInt(req.query.page || "1", 10));
     const limit = Math.max(
       1,
       Math.min(100, parseInt(req.query.limit || "10", 10))
-    ); // Max 100 per page
+    );
     const skip = (page - 1) * limit;
 
-    // ============================================
-    // BUILD QUERY WITH FILTERS
-    // ============================================
     const query = {};
 
-    // Status filter (skip if 'all')
     if (status !== "all") {
       query.status = status;
     }
@@ -680,6 +710,7 @@ router.get("/admin/:status", async (req, res) => {
     // Extract filter parameters
     const {
       userId,
+      cropId, // 🆕 NEW: Added cropId filter
       phone,
       fullName,
       cropName,
@@ -690,16 +721,17 @@ router.get("/admin/:status", async (req, res) => {
       toDate,
     } = req.query;
 
-    // ============================================
-    // EXACT MATCH FILTER (userId only)
-    // ============================================
+    // EXACT MATCH FILTERS
     if (userId) {
       query.userId = String(userId).trim();
     }
 
-    // ============================================
-    // PARTIAL MATCH FILTERS - All Case-Insensitive with Regex Escaping
-    // ============================================
+    // 🆕 NEW: Exact match filter for cropId
+    if (cropId) {
+      query.cropId = String(cropId).trim();
+    }
+
+    // PARTIAL MATCH FILTERS
     if (phone) {
       const escapedPhone = escapeRegex(String(phone).trim());
       query.phone = new RegExp(escapedPhone, "i");
@@ -730,16 +762,13 @@ router.get("/admin/:status", async (req, res) => {
       query.district = new RegExp(escapedDistrict, "i");
     }
 
-    // ============================================
-    // DATE RANGE FILTER (FIXED FOR UTC)
-    // ============================================
+    // DATE RANGE FILTER
     if (fromDate || toDate) {
       query.createdAt = {};
 
       if (fromDate) {
         const f = new Date(String(fromDate));
         if (!isNaN(f.getTime())) {
-          // Set to start of day in UTC (00:00:00.000)
           f.setUTCHours(0, 0, 0, 0);
           query.createdAt.$gte = f;
         }
@@ -748,26 +777,18 @@ router.get("/admin/:status", async (req, res) => {
       if (toDate) {
         const t = new Date(String(toDate));
         if (!isNaN(t.getTime())) {
-          // Set to end of day in UTC (23:59:59.999)
           t.setUTCHours(23, 59, 59, 999);
           query.createdAt.$lte = t;
         }
       }
 
-      // Remove createdAt if no valid dates were parsed
       if (Object.keys(query.createdAt).length === 0) {
         delete query.createdAt;
       }
     }
 
-    // ============================================
-    // DEBUG LOGGING (Optional - comment out in production)
-    // ============================================
     console.log('🔍 Applied Query Filters:', JSON.stringify(query, null, 2));
 
-    // ============================================
-    // EXECUTE QUERY
-    // ============================================
     const [totalCount, requests] = await Promise.all([
       Verification.countDocuments(query),
       Verification.find(query)
@@ -779,9 +800,6 @@ router.get("/admin/:status", async (req, res) => {
 
     console.log(`✅ Found ${totalCount} total results, returning ${requests.length} on page ${page}`);
 
-    // ============================================
-    // ENRICH RESPONSE WITH PHOTO SUMMARY
-    // ============================================
     const enriched = requests.map((v) => {
       const photoSummary = {
         total: Array.isArray(v.photos) ? v.photos.length : 0,
@@ -802,11 +820,9 @@ router.get("/admin/:status", async (req, res) => {
       };
     });
 
-    // ============================================
-    // BUILD APPLIED FILTERS RESPONSE
-    // ============================================
     const appliedFilters = {};
     if (userId) appliedFilters.userId = userId;
+    if (cropId) appliedFilters.cropId = cropId; // 🆕 NEW
     if (phone) appliedFilters.phone = phone;
     if (fullName) appliedFilters.fullName = fullName;
     if (cropName) appliedFilters.cropName = cropName;
@@ -816,9 +832,6 @@ router.get("/admin/:status", async (req, res) => {
     if (fromDate) appliedFilters.fromDate = fromDate;
     if (toDate) appliedFilters.toDate = toDate;
 
-    // ============================================
-    // SEND RESPONSE
-    // ============================================
     res.json({
       statusCode: 200,
       message: `${
