@@ -27,6 +27,63 @@ async function fetchCropData(cropId) {
   }
 }
 
+async function updateCropWithApprovedImages(cropId, approvedImageUrls, locationType) {
+  try {
+    const url = `${CROP_API_URL}/crop/update-verification/${cropId}`;
+    
+    console.log(`\n========================================`);
+    console.log(`📤 [UPDATE CROP] Sending approved images to Crop API`);
+    console.log(`🆔 Crop ID: ${cropId}`);
+    console.log(`📸 Images Count: ${approvedImageUrls.length}`);
+    console.log(`📍 Location Type: ${locationType}`);
+    console.log(`🔗 URL: ${url}`);
+    console.log(`📦 Images:`, approvedImageUrls);
+    console.log(`========================================\n`);
+    
+    const requestBody = {
+      images: approvedImageUrls,
+      isVerified: true,
+      locationType: locationType,
+      verifiedAt: new Date().toISOString()
+    };
+    
+    const response = await axios.patch(url, requestBody, {
+      timeout: 15000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      validateStatus: function (status) {
+        return status < 500;
+      }
+    });
+    
+    console.log(`\n========================================`);
+    console.log(`✅ [UPDATE CROP] Response received`);
+    console.log(`📊 Status: ${response.status}`);
+    console.log(`📦 Response:`, JSON.stringify(response.data, null, 2));
+    console.log(`========================================\n`);
+    
+    if (response.status === 200 || response.status === 201) {
+      return { success: true, data: response.data };
+    } else {
+      console.warn(`⚠️  [UPDATE CROP] Unexpected status: ${response.status}`);
+      return { success: false, error: response.data };
+    }
+  } catch (error) {
+    console.error(`\n========================================`);
+    console.error(`❌ [UPDATE CROP] Failed to update crop API`);
+    console.error(`Error:`, error.message);
+    if (error.response) {
+      console.error(`Response Status:`, error.response.status);
+      console.error(`Response Data:`, error.response.data);
+    }
+    console.error(`========================================\n`);
+    // Don't throw - we don't want to fail the verification if crop API update fails
+    return { success: false, error: error.message };
+  }
+}
+
 // Configure multer
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -647,8 +704,7 @@ router.patch("/:id/finalize", async (req, res) => {
     if (status === "approved" && !locationType) {
       return res.status(400).json({
         statusCode: 400,
-        message:
-          "locationType (farm/village) is required when approving a request",
+        message: "locationType (farm/village) is required when approving a request",
       });
     }
 
@@ -683,12 +739,31 @@ router.patch("/:id/finalize", async (req, res) => {
       if (approvedPhotos.length === 0) {
         return res.status(400).json({
           statusCode: 400,
-          message:
-            "Cannot approve request. At least one photo must be approved first.",
+          message: "Cannot approve request. At least one photo must be approved first.",
         });
+      }
+
+      // 🆕 UPDATE CROP API WITH APPROVED IMAGES
+      const approvedImageUrls = approvedPhotos.map(photo => photo.url);
+      
+      console.log(`\n🚀 [FINALIZE] Updating Crop API with approved images`);
+      console.log(`🆔 Crop ID: ${verification.cropId}`);
+      console.log(`📸 Approved Images: ${approvedImageUrls.length}`);
+      
+      const cropUpdateResult = await updateCropWithApprovedImages(
+        verification.cropId,
+        approvedImageUrls,
+        locationType
+      );
+
+      if (cropUpdateResult) {
+        console.log(`✅ [FINALIZE] Crop API updated successfully`);
+      } else {
+        console.warn(`⚠️  [FINALIZE] Crop API update failed, but continuing with verification approval`);
       }
     }
 
+    // Update verification status
     verification.status = status;
     verification.reviewedAt = new Date();
 
@@ -709,6 +784,8 @@ router.patch("/:id/finalize", async (req, res) => {
 
     await verification.save();
 
+    console.log(`✅ [FINALIZE] Verification ${status} successfully: ${verification._id}`);
+
     res.json({
       statusCode: 200,
       message: `Verification request ${status} successfully`,
@@ -726,7 +803,7 @@ router.patch("/:id/finalize", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error finalizing verification:", error);
+    console.error("❌ [FINALIZE] Error finalizing verification:", error);
     res.status(500).json({
       statusCode: 500,
       message: "Error finalizing verification",
