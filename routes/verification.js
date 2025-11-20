@@ -107,7 +107,7 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
 
     console.log(`📍 Processing verification for userId: ${userId}, cropId: ${cropId}, cropName: ${cropName}`);
 
-    const existingRequest = await Verification.findOne({ userId }).sort({
+    const existingRequest = await Verification.findOne({ cropId }).sort({
       createdAt: -1,
     });
 
