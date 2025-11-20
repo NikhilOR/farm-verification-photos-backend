@@ -416,11 +416,11 @@ router.get("/admin/:status", async (req, res) => {
 // ============================================
 // 3. USER CURRENT STATUS (Specific multi-segment path)
 // ============================================
-router.get("/user/:userId/current-status", async (req, res) => {
+router.get("/crop/:cropId/current-status", async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { cropId } = req.params;
 
-    const latestVerification = await Verification.findOne({ userId }).sort({
+    const latestVerification = await Verification.findOne({ cropId }).sort({
       createdAt: -1,
     });
 
@@ -457,7 +457,7 @@ router.get("/user/:userId/current-status", async (req, res) => {
 
       case "approved":
         canSubmit = false;
-        blockMessage = "Cannot submit new request. You are already verified.";
+        blockMessage = "Cannot submit new request. This crop is already verified.";
         break;
 
       case "rejected":
@@ -496,6 +496,7 @@ router.get("/user/:userId/current-status", async (req, res) => {
     });
   }
 });
+
 
 // ============================================
 // 4. USER VERIFICATIONS (Specific path)
