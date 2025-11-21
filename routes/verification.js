@@ -218,6 +218,7 @@ router.post("/submit", upload.array("photos", 3), async (req, res) => {
         id: verification._id,
         userId: verification.userId,
         cropId: verification.cropId,
+        requestId: verification.requestId, 
         cropName: verification.cropName,
         photos: verification.photos,
         status: verification.status,
@@ -265,6 +266,7 @@ router.get("/admin/:status", async (req, res) => {
     }
 
     const {
+      requestId,
       userId,
       cropId,
       phone,
@@ -276,6 +278,11 @@ router.get("/admin/:status", async (req, res) => {
       fromDate,
       toDate,
     } = req.query;
+
+    if (requestId) {
+  const escapedRequestId = escapeRegex(String(requestId).trim());
+  query.requestId = new RegExp(escapedRequestId, "i");
+}
 
     if (userId) {
       query.userId = String(userId).trim();
@@ -373,6 +380,7 @@ router.get("/admin/:status", async (req, res) => {
     });
 
     const appliedFilters = {};
+    if (requestId) appliedFilters.requestId = requestId;
     if (userId) appliedFilters.userId = userId;
     if (cropId) appliedFilters.cropId = cropId;
     if (phone) appliedFilters.phone = phone;
@@ -479,6 +487,7 @@ router.get("/crop/:cropId/current-status", async (req, res) => {
         blockMessage: blockMessage,
         verification: {
           id: latestVerification._id,
+          requestId: latestVerification.requestId,
           status: latestVerification.status,
           rejectionReason: latestVerification.rejectionReason,
           rejectionNotes: latestVerification.rejectionNotes,
@@ -569,7 +578,7 @@ router.patch("/:id/review-images", async (req, res) => {
       if (approvedPhotoIds.includes(photo._id.toString())) {
         photo.status = "approved";
       } else {
-        photo.status = "rejected";
+        photo.status = "pending";
       }
     });
 
@@ -756,6 +765,7 @@ router.patch("/:id/finalize", async (req, res) => {
         id: verification._id,
         userId: verification.userId,
         cropId: verification.cropId,
+        requestId: verification.requestId,
         status: verification.status,
         rejectionReason: verification.rejectionReason,
         rejectionNotes: verification.rejectionNotes,

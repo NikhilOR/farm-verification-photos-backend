@@ -1,7 +1,20 @@
 // models/Verification.js
 const mongoose = require('mongoose');
 
+// Helper function to generate requestId
+const generateRequestId = () => {
+  const year = new Date().getFullYear();
+  const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `OR-REQ-${year}-${randomPart}`;
+};
+
 const verificationSchema = new mongoose.Schema({
+    requestId: { 
+    type: String, 
+    unique: true,
+    required: true,
+    default: generateRequestId
+  },
   userId: { type: String, required: true },
   cropId: { type: String, required: true },
   cropName: { type: String, required: true },
@@ -77,10 +90,33 @@ verificationSchema.index({ location: '2dsphere' });
 verificationSchema.index({ userId: 1 });
 verificationSchema.index({ cropId: 1 });
 verificationSchema.index({ status: 1 });
+verificationSchema.index({ requestId: 1 });
 
 // Update timestamp before saving
-verificationSchema.pre('save', function(next) {
+verificationSchema.pre('save', async function(next) {
   this.updatedAt = Date.now();
+  
+  // Only generate requestId for new documents
+  if (this.isNew && !this.requestId) {
+    let isUnique = false;
+    let attempts = 0;
+    const maxAttempts = 10;
+    
+    while (!isUnique && attempts < maxAttempts) {
+      const newRequestId = generateRequestId();
+      const existing = await mongoose.model('Verification').findOne({ requestId: newRequestId });
+      if (!existing) {
+        this.requestId = newRequestId;
+        isUnique = true;
+      }
+      attempts++;
+    }
+    
+    if (!isUnique) {
+      return next(new Error('Failed to generate unique requestId'));
+    }
+  }
+  
   next();
 });
 
